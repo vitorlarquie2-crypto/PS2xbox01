@@ -7,6 +7,8 @@ $project = Join-Path $PSScriptRoot 'Diagnostics\Diagnostics.csproj'
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
 if (!$msbuild) { throw 'MSBuild with the UWP workload is required.' }
+$signtool = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe'
+if (!(Test-Path $signtool)) { throw 'Windows SDK 10.0.19041.0 SignTool is required.' }
 New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
 $certificate = New-SelfSignedCertificate -Type Custom -Subject 'CN=PS2XboxDevelopment' `
     -KeyUsage DigitalSignature -FriendlyName 'PS2Xbox development test' `
@@ -17,12 +19,15 @@ try {
     Export-Certificate -Cert $certificate -FilePath (Join-Path $OutputDirectory 'PS2XboxDevelopment.cer') | Out-Null
     & $msbuild $project /restore /t:Build /p:Configuration=Release /p:Platform=x64 `
         /p:GenerateAppxPackageOnBuild=true /p:UapAppxPackageBuildMode=SideloadOnly `
-        /p:AppxBundle=Never /p:AppxPackageSigningEnabled=true `
-        "/p:PackageCertificateThumbprint=$($certificate.Thumbprint)" "/p:AppxPackageDir=$OutputDirectory\"
+        /p:AppxBundle=Never /p:AppxPackageSigningEnabled=false `
+        /p:AppxPackageExtension=.appx /p:AppxPackageFileName=Diagnostics_0.1.0.0_x64.appx `
+        "/p:AppxPackageDir=$OutputDirectory\"
     if ($LASTEXITCODE -ne 0) { throw "MSBuild failed: $LASTEXITCODE" }
     $package = Get-ChildItem $OutputDirectory -Recurse -Filter '*.appx' |
         Where-Object { $_.DirectoryName -notmatch '[\\/]Dependencies([\\/]|$)' } | Select-Object -First 1
     if (!$package) { throw 'Build did not produce an APPX.' }
+    & $signtool sign /fd SHA256 /sha1 $certificate.Thumbprint $package.FullName
+    if ($LASTEXITCODE -ne 0) { throw "APPX signing failed: $LASTEXITCODE" }
     # Check signer identity; the self-signed chain still requires console acceptance.
     $signature = Get-AuthenticodeSignature $package.FullName
     if (!$signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
