@@ -30,7 +30,13 @@ Se falhar, anote a etapa, a versão 0.1.0.0 e o código de erro de instalação/
 
 <!-- coderabbit-ai-generated-section:v1:aa6a511a1ff9c3bd216cee54212fd72fa6427de40314c30a97fe4172396b6ee0 -->
 
-A revisão `25365e306b8932e7539e44db47b35136bd8af830` foi compilada e assinada com sucesso no [build Windows](https://github.com/vitorlarquie2-crypto/PS2xbox01/actions/runs/41356258756), com zero erros e zero avisos. O APPX, os hashes e as três dependências x64 foram conferidos. A instalação, a aceitação do certificado e o funcionamento no Series S ainda precisam ser testados no console.
+A revisão `25365e306b8932e7539e44db47b35136bd8af830` foi compilada e assinada com sucesso no [build Windows](https://github.com/vitorlarquie2-crypto/PS2xbox01/actions/runs/41356258756), com zero erros e zero avisos. O APPX, os hashes e as três dependências x64 foram conferidos. <!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:1fd057115583808eef81b5ff330804f30fd1040ac78c1e7530a08b98d142abd3 -->
+
+O usuário informou que o diagnóstico funcionou sem erros no Xbox Series S em Dev Mode. Esse resultado foi relatado pelo usuário; não houve observação direta do console nesta tarefa.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 <!-- /coderabbit-ai-generated:v1 -->
 

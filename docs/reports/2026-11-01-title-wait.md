@@ -12,6 +12,20 @@ A inspeção do C++ gerado para esta versão mostra que `demo_title` consulta o 
 
 ## Continuidade
 
-Investigar quem deve chamar `opflowOp1End` ou marcar o bit 4 e o estado do agendador, recursos e callbacks envolvidos. Comparar com uma referência antes de modificar o comportamento; não forçar o bit nem remover a espera. O contador GP inalterado durante as leituras é uma observação pontual, não prova de travamento geral. Os arquivos do disco, RAM e código gerado permanecem fora do Git.
+<!-- coderabbit-ai-generated:v1 -->
 
-A execução não demonstra menu visível, jogabilidade, áudio funcional ou compatibilidade Xbox. O Xbox Series S do usuário tem Dev Mode; ainda faltam backend e pacote Xbox, além de validação com SDK e console.
+<!-- coderabbit-ai-generated-section:v1:51cd63909c057ca1c820e71bf188bfcbca774ad3bb043a842e4cd1be10cca38e -->
+
+O código gerado mostra uma chamada direta em `demo_op1` (endereço convidado `0x013ab2a8`) para `opflowOp1End` (`0x01357648`). A consulta do título ocorre em `demo_title` (`0x014030c0`). No caminho anterior à chamada, há um laço que retorna a `0x013ab200` enquanto o resultado de `0x0134c838` for zero; outro salto em `0x013ab26c` pode levar diretamente à chamada. Essa análise estática não prova que `demo_op1` tenha sido executada nem identifica qual condição foi observada no teste.
+
+Na próxima execução, observar a entrada de `demo_op1`, o laço em `0x013ab200` e a chamada em `0x013ab2a8`, junto ao estado do agendador e dos recursos envolvidos.
+
+<!-- /coderabbit-ai-generated:v1 --> Comparar com uma referência antes de modificar o comportamento; não forçar o bit nem remover a espera. O contador GP inalterado durante as leituras é uma observação pontual, não prova de travamento geral. Os arquivos do disco, RAM e código gerado permanecem fora do Git.
+
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:a17e0f63ce65789c0ddb73f59358785ae86c656560098a453e27821910e65ddb -->
+
+A execução não demonstra menu visível, jogabilidade ou áudio funcional. Para o jogo no Xbox, ainda faltam a integração do runtime, um backend adequado e validação no console. O pacote UWP independente de diagnóstico foi compilado e seu funcionamento sem erros foi relatado pelo usuário no Series S em Dev Mode.
+
+<!-- /coderabbit-ai-generated:v1 -->
