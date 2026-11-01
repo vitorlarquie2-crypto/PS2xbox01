@@ -1,0 +1,29 @@
+name: Xbox diagnostic package
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'xbox/**'
+      - '.github/workflows/xbox-diagnostics.yml'
+  pull_request:
+    paths:
+      - 'xbox/**'
+      - '.github/workflows/xbox-diagnostics.yml'
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build signed x64 UWP diagnostic
+        shell: pwsh
+        run: ./xbox/build-diagnostics.ps1
+      - name: Publish test package and dependencies
+        uses: actions/upload-artifact@v6
+        with:
+          name: PS2Xbox-Diagnostics-x64
+          path: artifacts/xbox/
+          if-no-files-found: error
+          retention-days: 14

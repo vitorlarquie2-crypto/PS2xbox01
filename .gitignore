@@ -27,3 +27,10 @@ android/.gradle/
 __pycache__/
 *.pyc
 ps2_log.txt
+
+# Xbox diagnostic build outputs and signing material
+artifacts/
+xbox/**/bin/
+xbox/**/obj/
+*.pfx
+*.p12
