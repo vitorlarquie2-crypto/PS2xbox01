@@ -26,6 +26,12 @@ Depois de uma geração bem-sucedida, baixe e extraia o artefato em um dispositi
 6. Desconecte e reconecte o controle e confirme a recuperação.
 7. Retorne ao Dev Home, reabra o aplicativo e registre o resultado.
 
-Se falhar, anote a etapa, a versão 0.1.0.0 e o código de erro de instalação/abertura. Nenhum arquivo do jogo é necessário para este diagnóstico. A instalação no Series S e a compilação Windows precisam ser confirmadas; arquivos de projeto por si só não constituem um pacote validado.
+Se falhar, anote a etapa, a versão 0.1.0.0 e o código de erro de instalação/abertura. Nenhum arquivo do jogo é necessário para este diagnóstico. <!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:aa6a511a1ff9c3bd216cee54212fd72fa6427de40314c30a97fe4172396b6ee0 -->
+
+A revisão `25365e306b8932e7539e44db47b35136bd8af830` foi compilada e assinada com sucesso no [build Windows](https://github.com/vitorlarquie2-crypto/PS2xbox01/actions/runs/41356258756), com zero erros e zero avisos. O APPX, os hashes e as três dependências x64 foram conferidos. A instalação, a aceitação do certificado e o funcionamento no Series S ainda precisam ser testados no console.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 Referências: [empacotamento UWP](https://learn.microsoft.com/en-us/windows/uwp/packaging/auto-build-package-uwp-apps), [Xbox Device Portal](https://learn.microsoft.com/en-us/windows/uwp/xbox-apps/device-portal-xbox).
