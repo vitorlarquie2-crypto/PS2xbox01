@@ -6,7 +6,13 @@
 
 <!-- coderabbit-ai-generated-section:v1:3bba0fc7331764df1dfdf37d4344d73148a7fc976436e7548fdc0fa3efab8907 -->
 
-Atualizado em 1º de novembro de 2026. Este repositório contém código experimental e ferramentas de investigação. **Ainda não existe pacote UWP ou execução validada no Xbox.** O diagnóstico Linux já inicializa KERNEL, MANAGER e GAMECORE a partir do SCUS e dos módulos IOP originais, sem injeção manual. A correção mais recente preserva os limites de DIRECT/DIRECTHL ao continuar imagens GIF; consulte o [relatório VIF](reports/2026-11-01-vif-direct-boundary.md) para resultados e limites. Jogabilidade completa permanece sem comprovação.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:2083668c8f4bee9c08270cbb5637317cf0636773da61c9c0fd0cfe9cf0f6ed6b -->
+
+Atualizado em 1º de novembro de 2026. Este repositório contém código experimental e ferramentas de investigação. O [diagnóstico UWP x64](../xbox/README.md) foi compilado e assinado; o usuário relatou funcionamento sem erros no Series S em Dev Mode. **Esse aplicativo ainda não inclui o runtime PS2 nem o jogo.** O diagnóstico Linux inicializa KERNEL, MANAGER e GAMECORE a partir do SCUS e dos módulos IOP originais, sem injeção manual. A correção dos limites DIRECT/DIRECTHL e seus resultados estão no [relatório VIF](reports/2026-11-01-vif-direct-boundary.md). Jogabilidade completa permanece sem comprovação.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 <!-- /coderabbit-ai-generated:v1 -->
 
@@ -43,7 +49,15 @@ O repositório originário informado pelo usuário é [PS2toXBOX99](https://gith
 
 <!-- /coderabbit-ai-generated:v1 -->
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:846386782ebb184f7db728060b1f51d8fc4657ee8633d5055a1ef0832fca4af6 -->
+
 Relatos detalhados: [reconstrução e limitações](reports/2026-11-01-boot-reconstruction.md), [SIO2 e Pad2](reports/2026-11-01-sio2-sequence.md), [investigação Pad2](reports/2026-11-01-pad2-investigation.md) e [guia específico do jogo](../shadow_of_the_colossus/README.md). Relatórios anteriores descrevem estados históricos e podem ter sido superados por relatórios posteriores.
+
+A [investigação posterior](reports/2026-11-01-clang-and-title-progress.md) corrigiu a ligação Clang Release e confirmou que a abertura libera a flag de título com entrada normal do controle. A renderização do menu ainda não foi validada.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ## Como continuar
 
