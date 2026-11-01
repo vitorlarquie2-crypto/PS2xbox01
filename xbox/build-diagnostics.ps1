@@ -23,10 +23,7 @@ try {
     $package = Get-ChildItem $OutputDirectory -Recurse -Filter '*.appx' |
         Where-Object { $_.DirectoryName -notmatch '[\\/]Dependencies([\\/]|$)' } | Select-Object -First 1
     if (!$package) { throw 'Build did not produce an APPX.' }
-    $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
-        Sort-Object FullName -Descending | Select-Object -First 1
-    if (!$signTool) { throw 'Windows SDK SignTool is required.' }
-    # Validate the embedded signature. The certificate is intentionally self-signed.
+    # Check signer identity; the self-signed chain still requires console acceptance.
     $signature = Get-AuthenticodeSignature $package.FullName
     if (!$signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
         throw 'The APPX was not signed with the expected certificate.'
