@@ -114,4 +114,10 @@ include("${CMAKE_SOURCE_DIR}/ps2xRuntime/cmake/ReleaseMode.cmake")
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     EnableFastReleaseMode(ps2_test_lib)
     EnableFastReleaseMode(ps2x_tests)
+    if(BUILD_TESTING)
+        # These executables consume the same IPO-enabled runtime archive.
+        # Clang needs LTO at link time to read its LLVM bitcode members.
+        EnableFastReleaseMode(ps2_missing_capture_tests)
+        EnableFastReleaseMode(ps2_missing_capture_runtime_tests)
+    endif()
 endif()
