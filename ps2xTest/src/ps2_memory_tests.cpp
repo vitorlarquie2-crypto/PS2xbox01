@@ -1419,6 +1419,49 @@ void register_ps2_memory_tests()
             t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u, "VIF1 QWC should be cleared after drain");
         });
 
+        tc.Run("VIF1 DMA completes long finite chains beyond 4096 tags", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            constexpr uint32_t channel = 0x10009000u, base = 0x40000u, count = 16000u;
+            auto *ram = mem.getRDRAM();
+            std::memset(ram + base, 0, (count + 1u) * 16u);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint64_t tag = makeDmaTag(0u, 1u, 0u, false);
+                std::memcpy(ram + base + i * 16u, &tag, sizeof(tag));
+            }
+            const uint64_t end = makeDmaTag(0u, 7u, 0u, false);
+            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x6a39u);
+            std::memcpy(ram + base + count * 16u, &end, sizeof(end));
+            std::memcpy(ram + base + count * 16u + 12u, &mark, sizeof(mark));
+            mem.writeIORegister(channel + 0x30u, base);
+            mem.writeIORegister(channel, 0x144u);
+            mem.processPendingTransfers();
+            t.Equals(mem.vif1_regs.mark, 0x6a39u, "The terminal VIF command must reach the device");
+            t.Equals(mem.readIORegister(channel + 0x30u), base + count * 16u,
+                     "TADR must reach the terminal END tag");
+            t.IsTrue((mem.readIORegister(channel) & 0x100u) == 0u,
+                     "STR should clear after the complete chain drains");
+        });
+
+        tc.Run("DMA cyclic chains report failure without false completion", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            constexpr uint32_t channel = 0x10009000u, base = 0x40000u;
+            const uint64_t next = makeDmaTag(0u, 2u, base, false);
+            std::memset(mem.getRDRAM() + base, 0, 16u);
+            std::memcpy(mem.getRDRAM() + base, &next, sizeof(next));
+            mem.writeIORegister(channel + 0x30u, base);
+            bool failed = false;
+            try { mem.writeIORegister(channel, 0x144u); }
+            catch (const std::runtime_error &) { failed = true; }
+            t.IsTrue(failed, "An infinite snapshot must report its repeated state");
+            t.IsTrue((mem.readIORegister(0x1000e010u) & 2u) == 0u,
+                     "A failed transfer must not signal VIF1 completion");
+        });
+
         tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
         {
             PS2Memory mem;

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <set>
 
 namespace
 {
@@ -1347,8 +1348,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
                     uint32_t asp = (chcr >> 4) & 0x3u;
                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
-                    const int kMaxChainTags = 4096;
                     std::vector<uint8_t> chainBuf;
+                    // A frame can contain tens of thousands of tags. Detect a
+                    // non-terminating snapshot by its complete return-stack state,
+                    // instead of silently completing a truncated transfer.
+                    std::set<std::array<uint32_t, 4>> visitedChainStates;
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
@@ -1405,11 +1409,14 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         channelBase == 0x10009000u || channelBase == 0x10008000u;
                     const bool transferTagData = isVifChannel && (chcr & 0x40u) != 0u;
 
-                    int tagsProcessed = 0;
                     uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
 
-                    while (tagsProcessed < kMaxChainTags)
+                    while (true)
                     {
+                        const std::array<uint32_t, 4> state = {
+                            tagAddr, asp, asp > 0u ? asr0 : 0u, asp > 1u ? asr1 : 0u};
+                        if (!visitedChainStates.insert(state).second)
+                            throw std::runtime_error("DMA chain repeats a transfer state without terminating");
                         const uint32_t currentTagAddr = tagAddr;
                         const bool tagInSPR = isScratchpad(tagAddr);
                         uint32_t physTag = 0;
@@ -1443,7 +1450,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
-                        ++tagsProcessed;
 
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
