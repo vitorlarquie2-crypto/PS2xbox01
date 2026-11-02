@@ -42,6 +42,16 @@ jobs:
           $native = (Resolve-Path 'build/uwp/ps2xRuntime/Release/PS2XboxRuntime.dll').Path
           & $msbuild xbox/Game/Game.csproj /restore /t:Build /p:Configuration=Release /p:Platform=x64 "/p:NativeRuntimePath=$native" /p:AppxPackageSigningEnabled=false
           if ($LASTEXITCODE -ne 0) { throw "UWP app compilation failed: $LASTEXITCODE" }
+      - name: Preserve compiled shell for local private game packaging
+        uses: actions/upload-artifact@v6
+        with:
+          name: PS2Xbox-Game-shell-not-installable
+          path: |
+            xbox/Game/bin/x64/Release/AppX/**
+            !xbox/Game/bin/x64/Release/AppX/PS2XboxRuntime.dll
+            !xbox/Game/bin/x64/Release/AppX/**/*.pdb
+          if-no-files-found: error
+          retention-days: 14
   linux-host:
     runs-on: ubuntu-latest
     steps:
