@@ -1,6 +1,7 @@
 #include "MiniTest.h"
 #include "ps2recomp/code_generator.h"
 #include "ps2recomp/instructions.h"
+#include "ps2recomp/r5900_decoder.h"
 #include "ps2recomp/types.h"
 #include "ps2_runtime_macros.h"
 
@@ -210,7 +211,7 @@ void register_ps2_float_semantics_tests()
             t.Equals(laneBits(flushed, 3), bitsOf(0.5f), "lane 3: 1 * 0.5 should be 0.5");
         });
 
-        tc.Run("DIV.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
+        tc.Run("DIV.S, SQRT.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
         {
             CodeGenerator gen({}, {});
 
@@ -219,6 +220,17 @@ void register_ps2_float_semantics_tests()
             t.IsTrue(div.find("ctx->f[2] = FPU_DIV_S(ctx->f[3], ctx->f[4])") != std::string::npos,
                      "DIV.S should write fs / ft to fd but got: " + div);
             t.IsTrue(div.find("INFINITY") == std::string::npos, "DIV.S must not produce IEEE infinity but got: " + div);
+
+            const std::string sqrt = gen.translateInstruction(makeCop1S(COP1_S_SQRT, 2, 3, 4));
+            t.IsTrue(sqrt.find("ctx->f[2] = FPU_SQRT_S(ctx->f[4])") != std::string::npos,
+                     "EE SQRT.S should read ft, even when fs differs, but got: " + sqrt);
+
+            // Real EE encoding used to normalize the game's left analog input.
+            R5900Decoder decoder;
+            const Instruction analogSqrt = decoder.decodeInstruction(0x1b22c8u, 0x46020004u);
+            const std::string analog = gen.translateInstruction(analogSqrt);
+            t.IsTrue(analog.find("ctx->f[0] = FPU_SQRT_S(ctx->f[2])") != std::string::npos,
+                     "0x46020004 should compute sqrt(f2) into f0 but got: " + analog);
 
             const std::string rsqrt = gen.translateInstruction(makeCop1S(COP1_S_RSQRT, 2, 3, 4));
             t.IsTrue(rsqrt.find("ctx->f[2] = FPU_RSQRT_S(ctx->f[3], ctx->f[4])") != std::string::npos,
