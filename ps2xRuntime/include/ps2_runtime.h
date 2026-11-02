@@ -149,6 +149,9 @@ struct alignas(16) R5900Context
         std::memset(this, 0, sizeof(*this));
 
         // Initialize VU0 registers
+        // VF00 is the hardware constant (0, 0, 0, 1), including in contexts
+        // created/reset by the EE scheduler rather than PS2Runtime itself.
+        vu0_vf[0] = _mm_set_ps(1.0f, 0.0f, 0.0f, 0.0f);
         vu0_q = 1.0f; // Q register usually initialized to 1.0
 
         // Reset COP0 registers
@@ -291,6 +294,7 @@ public:
     void run();
 
     [[nodiscard]] ps2x::iop::ModuleLoadResult loadIopModule(std::string_view path, const void *arguments = nullptr, uint32_t argumentSize = 0);
+    ps2x::iop::ModuleLoadResult loadIopModuleImage(std::string_view name, const std::vector<uint8_t> &image, const void *arguments = nullptr, uint32_t argumentSize = 0);
     [[nodiscard]] ps2x::iop::ModuleLoadResult loadIopModuleBuffer(uint32_t guestAddress, const void *arguments = nullptr, uint32_t argumentSize = 0);
     [[nodiscard]] bool stopIopModule(int32_t moduleId, int32_t *result = nullptr);
     [[nodiscard]] ps2x::iop::DebugSnapshot iopDebugSnapshot() const;

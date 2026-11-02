@@ -166,6 +166,33 @@ namespace
         }
     }
 
+    void testGuestBranchJumpToEntryHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t entryPc = ctx->pc;
+        setRegU32(*ctx, 29, ::getRegU32(ctx, 29) - 0x40u);
+        // A generated wrapper unwinds after a non-call transfer, even when
+        // that transfer happens to target its own entry address.
+        (void)runtime->dispatchGuestBranch(rdram, ctx, entryPc, entryPc + 4u, 0u,
+                                          PS2Runtime::GuestBranchKind::DirectJump, "test-j-entry");
+    }
+
+    void testGuestBranchJumpToFallthroughHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        setRegU32(*ctx, 29, ::getRegU32(ctx, 29) - 0x40u);
+        (void)runtime->dispatchGuestBranch(rdram, ctx, 0x2008u, ctx->pc, 0u,
+                                          PS2Runtime::GuestBranchKind::DirectJump, "test-j-fallthrough");
+    }
+
+    void testGuestBranchCheckpointAtEntryHandler(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        setRegU32(*ctx, 29, ::getRegU32(ctx, 29) - 0x40u);
+        runtime->postEeEvent(EeEvent{EeEventType::ExternalWake, 0u, 0u});
+        // Model a generated backward edge that saves the entry PC and yields.
+        if (runtime->eeCheckpointDue())
+            return;
+        setRegU32(*ctx, 2, 0xBADu);
+    }
+
     std::atomic<uint32_t> gGuestJumpTargetCount{0u};
 
     void testGuestJumpTargetHandler(uint8_t *, R5900Context *, PS2Runtime *)
@@ -404,6 +431,40 @@ void register_ps2_runtime_expansion_tests()
                      "unchanged callee PC should be converted to call fallthrough");
             t.Equals(::getRegU32(&ctx, 2), 0x00FACE42u,
                      "callee should still execute normally");
+        });
+
+        tc.Run("nested guest transfers to the callee entry do not return to the caller", [](TestCase &t)
+        {
+            for (auto handler : {&testGuestBranchJumpToEntryHandler, &testGuestBranchCheckpointAtEntryHandler})
+            {
+                PS2Runtime runtime;
+                runtime.registerFunction(0x3300u, handler);
+                R5900Context ctx{};
+                setRegU32(ctx, 29, 0x8000u);
+
+                const bool continued = runtime.dispatchGuestBranch(
+                    nullptr, &ctx, 0x3300u, 0x2000u, 0x2008u,
+                    PS2Runtime::GuestBranchKind::DirectCall, "test-jal-yield");
+
+                t.IsFalse(continued, "a nested jump/checkpoint must unwind every native caller");
+                t.Equals(ctx.pc, 0x3300u, "the dispatcher must retain the exact transfer target");
+                t.Equals(::getRegU32(&ctx, 29), 0x7FC0u, "the guest frame must remain live until the dispatcher resumes it");
+                t.Equals(::getRegU32(&ctx, 2), 0u, "the checkpoint must actually yield");
+            }
+        });
+
+        tc.Run("an explicit nested jump to caller fallthrough still unwinds", [](TestCase &t)
+        {
+            PS2Runtime runtime;
+            runtime.registerFunction(0x3300u, &testGuestBranchJumpToFallthroughHandler);
+            R5900Context ctx{};
+            setRegU32(ctx, 29, 0x8000u);
+            const bool continued = runtime.dispatchGuestBranch(
+                nullptr, &ctx, 0x3300u, 0x2000u, 0x2008u,
+                PS2Runtime::GuestBranchKind::DirectCall, "test-jal-transfer");
+            t.IsFalse(continued, "an explicit jump must unwind even when its PC matches caller fallthrough");
+            t.Equals(ctx.pc, 0x2008u, "the exact jump target must survive the unwind");
+            t.Equals(::getRegU32(&ctx, 29), 0x7FC0u, "the live callee frame must not be treated as a return");
         });
 
         tc.Run("dispatchGuestBranch jump returns to central dispatcher without nesting", [](TestCase &t)

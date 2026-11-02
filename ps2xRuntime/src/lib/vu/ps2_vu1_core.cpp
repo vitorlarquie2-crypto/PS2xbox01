@@ -5,6 +5,7 @@
 #include "ps2_vu1_detail.h"
 
 #include <algorithm>
+#include <bit>
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
@@ -851,8 +852,7 @@ void VU1Interpreter::progressXgkick()
         m_xgkick.cycleCredit -= 2u;
         if (m_xgkick.copiedBytes > XgkickPipeline::kBufferSize - 16u)
         {
-            reportReservedInstruction(false, 0xFFFFFFFBu);
-            m_xgkick.active = false;
+            stopXgkickOverflow(static_cast<uint64_t>(m_xgkick.copiedBytes) + 16u);
             return;
         }
 
@@ -890,8 +890,7 @@ void VU1Interpreter::progressXgkick()
 
             if (tagBytes > XgkickPipeline::kBufferSize - qwordOffset)
             {
-                reportReservedInstruction(false, 0xFFFFFFFBu);
-                m_xgkick.active = false;
+                stopXgkickOverflow(static_cast<uint64_t>(qwordOffset) + tagBytes);
                 return;
             }
             m_xgkick.currentTagEnd = qwordOffset + static_cast<uint32_t>(tagBytes);
@@ -912,6 +911,22 @@ void VU1Interpreter::progressXgkick()
             }
         }
     }
+}
+
+void VU1Interpreter::stopXgkickOverflow(uint64_t requiredBytes)
+{
+    uint64_t tag = 0;
+    if (m_xgkick.copiedBytes >= 16u && m_xgkick.copiedBytes <= XgkickPipeline::kBufferSize)
+        std::memcpy(&tag, m_xgkick.packet.data() + m_xgkick.copiedBytes - 16u, sizeof(tag));
+    RUNTIME_ERROR("[VU1 PATH1 overflow] cycle=" << m_cycle
+                  << " pc=0x" << std::hex << m_state.pc
+                  << " source=0x" << m_xgkick.sourceAddress
+                  << " lastQwordLo=0x" << tag << std::dec
+                  << " copied=" << m_xgkick.copiedBytes
+                  << " required=" << requiredBytes
+                  << " capacity=" << XgkickPipeline::kBufferSize << '\n');
+    m_stopRequested = true;
+    m_xgkick.active = false;
 }
 
 void VU1Interpreter::finishXgkick()
@@ -1005,10 +1020,10 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
                     ready = std::max(ready, m_vfReady[access.reg][component]);
             }
         }
-        for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
+        for (uint32_t reads = usage->viRead & 0xFFFEu; reads != 0u; reads &= reads - 1u)
         {
-            if ((usage->viRead & (1u << reg)) != 0u)
-                ready = std::max(ready, m_viReady[reg]);
+            const auto reg = std::countr_zero(reads);
+            ready = std::max(ready, m_viReady[reg]);
         }
         for (uint32_t component = 0; component < 4u; ++component)
         {
@@ -1063,10 +1078,10 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
         }
     }
 
-    for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
+    for (uint32_t writes = decoded.lowerUsage.viWrite & 0xFFFEu; writes != 0u; writes &= writes - 1u)
     {
-        if ((decoded.lowerUsage.viWrite & (1u << reg)) != 0u)
-            m_viReady[reg] = m_cycle + (decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency : decoded.lowerUsage.latency);
+        const auto reg = std::countr_zero(writes);
+        m_viReady[reg] = m_cycle + (decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency : decoded.lowerUsage.latency);
     }
     for (uint32_t component = 0; component < 4u; ++component)
     {
@@ -1662,14 +1677,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
 
         uint8_t writtenVi = 0u;
         int32_t oldVi = 0;
-        for (uint32_t reg = 1; reg < 16u; ++reg)
+        const uint32_t viWrites = decoded.lowerUsage.viWrite & 0xFFFEu;
+        if (viWrites != 0u)
         {
-            if ((decoded.lowerUsage.viWrite & (1u << reg)) != 0u)
-            {
-                writtenVi = static_cast<uint8_t>(reg);
-                oldVi = m_state.vi[reg];
-                break;
-            }
+            writtenVi = static_cast<uint8_t>(std::countr_zero(viWrites));
+            oldVi = m_state.vi[writtenVi];
         }
 
         const VfAccess upperWrite = decoded.upperUsage.vfWrite;

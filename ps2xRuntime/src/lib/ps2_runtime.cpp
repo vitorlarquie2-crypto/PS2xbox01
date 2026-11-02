@@ -6,6 +6,7 @@
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ps2_missing_capture.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
 #include "Kernel/Stubs/GS.h"
@@ -16,10 +17,12 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <exception>
 #include <fstream>
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <chrono>
 #include <atomic>
@@ -373,18 +376,25 @@ namespace
     }
 }
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+struct HostPresentationState
 {
-    static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
-    static bool s_hasLatchedInitialFrame = false;
-    static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
-    static uint32_t s_lastSourceFbp = std::numeric_limits<uint32_t>::max();
-    static bool s_lastPreferred = false;
-    static uint32_t s_lastWidth = 0u;
-    static uint32_t s_lastHeight = 0u;
-    static bool s_hasUploadedFrame = false;
-    static std::vector<uint8_t> s_scratch;
-    static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
+    uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+    bool s_hasLatchedInitialFrame = false;
+    uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
+    uint32_t s_lastSourceFbp = std::numeric_limits<uint32_t>::max();
+    bool s_lastPreferred = false;
+    uint32_t s_lastWidth = 0u;
+    uint32_t s_lastHeight = 0u;
+    bool s_hasUploadedFrame = false;
+    std::vector<uint8_t> s_scratch;
+    std::vector<uint8_t> s_uploadBuffer = std::vector<uint8_t>(DEFAULT_FB_SIZE, 0u);
+
+};
+
+static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight, HostPresentationState &state)
+{
+    auto &[s_lastPresentationTick, s_hasLatchedInitialFrame, s_lastDisplayFbp, s_lastSourceFbp,
+           s_lastPreferred, s_lastWidth, s_lastHeight, s_hasUploadedFrame, s_scratch, s_uploadBuffer] = state;
 
     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
@@ -568,6 +578,12 @@ ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModule(std::string_view path, con
 {
     auto scope = m_iopHost->enterCall(nullptr, m_memory.getRDRAM());
     return m_iopSubsystem->loadModule(path, arguments, argumentSize);
+}
+
+ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModuleImage(std::string_view name, const std::vector<uint8_t> &image, const void *arguments, uint32_t argumentSize)
+{
+    auto scope = m_iopHost->enterCall(nullptr, m_memory.getRDRAM());
+    return m_iopSubsystem->loadModuleImage(name, image, arguments, argumentSize);
 }
 
 ps2x::iop::ModuleLoadResult PS2Runtime::loadIopModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize)
@@ -1194,6 +1210,33 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
     const MissingFunctionPolicy policy = missingFunctionPolicy();
     const bool firstReport = !m_missingFunctionReported.exchange(true, std::memory_order_acq_rel);
 
+    if (firstReport)
+    {
+        const char *directory = std::getenv("PS2X_CAPTURE_MISSING_DIR");
+        if (directory && directory[0] != '\0')
+        {
+            try
+            {
+                if (rdram && rdram == m_memory.getRDRAM())
+                {
+                    std::string error;
+                    if (ps2_debug::captureMissingTarget(directory,
+                            std::span<const uint8_t>(rdram, m_memory.getRDRAMSize()),
+                            sourcePc, targetPc, error))
+                        std::cerr << "[guest-capture] saved to " << directory << std::endl;
+                    else
+                        std::cerr << "[guest-capture] " << error << std::endl;
+                }
+                else
+                    std::cerr << "[guest-capture] guest memory is unavailable" << std::endl;
+            }
+            catch (const std::exception &error)
+            {
+                std::cerr << "[guest-capture] " << error.what() << std::endl;
+            }
+        }
+    }
+
     const uint32_t pc = ctx->pc;
     const uint32_t ra = static_cast<uint32_t>(_mm_extract_epi32(ctx->r[31], 0));
     const uint32_t sp = static_cast<uint32_t>(_mm_extract_epi32(ctx->r[29], 0));
@@ -1350,6 +1393,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                      GuestBranchKind kind,
                                      const char *debugName)
 {
+    const auto unwindCaller = [this]()
+    {
+        if (m_eeScheduler)
+            m_eeScheduler->noteDispatchTransfer();
+        return false;
+    };
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 
@@ -1358,7 +1407,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     // this charge bounds straight-line call chains that have no local loop.
     if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
     {
-        return false;
+        return unwindCaller();
     }
 
     if (!isCall)
@@ -1369,7 +1418,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         }
 
         ctx->pc = targetPc;
-        return false;
+        return unwindCaller();
     }
 
     if (!hasFunction(targetPc))
@@ -1388,19 +1437,23 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         {
             ctx->pc = targetPc;
             // if you need the app to keep open to open debug pannel change this to false
-            return false;
+            return unwindCaller();
         }
 
-        return false;
+        return unwindCaller();
     }
 
     RecompiledFunction targetFn = lookupFunction(targetPc);
     const uint32_t entryPc = ctx->pc;
+    const uint64_t transferGeneration = m_eeScheduler ? m_eeScheduler->dispatchTransferGeneration() : 0u;
     targetFn(rdram, ctx, this);
+
+    if (m_eeScheduler && m_eeScheduler->dispatchTransferGeneration() != transferGeneration)
+        return unwindCaller();
 
     if (isStopRequested() || ctx->pc == 0u)
     {
-        return false;
+        return unwindCaller();
     }
 
     if (ctx->pc == entryPc)
@@ -1408,7 +1461,9 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         ctx->pc = fallthroughPc;
     }
 
-    return ctx->pc == fallthroughPc;
+    if (ctx->pc != fallthroughPc)
+        return unwindCaller();
+    return true;
 }
 
 void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
@@ -2211,7 +2266,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
 
 bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
 {
-    return m_eeScheduler->checkpointDue(cycles);
+    if (!m_eeScheduler->checkpointDue(cycles))
+        return false;
+    m_eeScheduler->noteDispatchTransfer();
+    return true;
 }
 
 [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
@@ -2363,6 +2421,9 @@ void PS2Runtime::run()
     UnloadImage(blank);
 
     std::atomic<bool> gameThreadFinished{false};
+#if defined(PS2X_EMBEDDED_HOST)
+    std::exception_ptr executionFailure;
+#endif
 
     std::thread gameThread([&]()
                            {
@@ -2377,14 +2438,21 @@ void PS2Runtime::run()
         }
         catch (const std::exception &e)
         {
+#if defined(PS2X_EMBEDDED_HOST)
+            executionFailure = std::current_exception();
+#endif
             std::cerr << "Error during program execution: " << e.what() << std::endl;
         }
         catch (...)
         {
+#if defined(PS2X_EMBEDDED_HOST)
+            executionFailure = std::current_exception();
+#endif
             std::cerr << "Error during program execution: unknown exception" << std::endl;
         }
         gameThreadFinished.store(true, std::memory_order_release); });
 
+    HostPresentationState presentation;
     uint64_t tick = 0;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
     {
@@ -2422,7 +2490,7 @@ void PS2Runtime::run()
         });
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+        UploadFrame(frameTex, this, presentWidth, presentHeight, presentation);
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -2468,5 +2536,8 @@ void PS2Runtime::run()
     UnloadTexture(frameTex);
     CloseWindow();
 
+#if defined(PS2X_EMBEDDED_HOST)
+    if (executionFailure) std::rethrow_exception(executionFailure);
+#endif
     RUNTIME_LOG("[run] exiting loop");
 }

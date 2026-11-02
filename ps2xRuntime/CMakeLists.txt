@@ -16,6 +16,7 @@ option(PS2X_ENABLE_IOP_RPC_TRACE "Log unhandled IOP/SIF RPC trace suggestions" O
 option(PS2X_STRICT_RETURN_DIAGNOSTICS "Route generated JR $ra returns through runtime branch diagnostics" OFF)
 option(PS2X_SHOW_WINDOWS_CONSOLE "Show a console window for ps2EntryRunner on Windows release builds" ON)
 option(PS2X_ENABLE_DEBUG_UI "Build the desktop runtime debug UI" ON)
+set(PS2X_RUNNER_GENERATED_DIR "" CACHE PATH "Directory containing generated runner sources and headers")
 
 if(PS2X_ENABLE_SCCACHE)
     find_program(PS2X_SCCACHE_PROGRAM sccache)
@@ -75,11 +76,18 @@ else()
         set(PLATFORM "Android" CACHE STRING "" FORCE)
     endif()
 
+    set(PS2X_RAYLIB_SUBDIR ".")
+    if(PS2X_EMBEDDED_HOST)
+        # Use the raylib ABI headers without compiling its desktop window backend.
+        set(PS2X_RAYLIB_SUBDIR "ps2x_headers_only")
+        set(PS2X_ENABLE_DEBUG_UI OFF)
+    endif()
     FetchContent_Declare(
         raylib
         GIT_REPOSITORY "https://github.com/raysan5/raylib.git"
         GIT_TAG "5.5" # we will migrate to 4.2.0 later, trust me it will be better
         GIT_PROGRESS TRUE
+        SOURCE_SUBDIR "${PS2X_RAYLIB_SUBDIR}"
     )
     FetchContent_MakeAvailable(raylib)
 
@@ -234,6 +242,19 @@ if(PS2X_IS_VITA)
         c
         pthread
     )
+elseif(PS2X_EMBEDDED_HOST)
+    add_library(ps2x_embedded_backend STATIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/host.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/audio.cpp")
+    target_include_directories(ps2x_embedded_backend PUBLIC "${raylib_SOURCE_DIR}/src")
+    target_link_libraries(ps2_host_backend INTERFACE ps2x_embedded_backend)
+    if(WIN32)
+        target_link_libraries(ps2x_embedded_backend PRIVATE xaudio2)
+    endif()
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+        add_executable(ps2x_embedded_host_tests "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/tests.cpp")
+        target_link_libraries(ps2x_embedded_host_tests PRIVATE ps2x_embedded_backend)
+    endif()
 else()
     target_link_libraries(ps2_host_backend INTERFACE raylib)
 
@@ -385,6 +406,7 @@ add_library(ps2_runtime STATIC
     src/lib/gs/gs_cpu_backend.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp
+    src/lib/ps2_missing_capture.cpp
     src/lib/ps2_pad.cpp
     src/lib/ps2_rom_device.cpp
     src/lib/ps2_vfs.cpp
@@ -437,20 +459,39 @@ target_sources(ps2_runtime PRIVATE
     ${KERNEL_SRC_FILES}
 )
 
-file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*.cpp"
-)
+if(PS2X_RUNNER_GENERATED_DIR)
+    get_filename_component(PS2X_RUNNER_GENERATED_DIR_ABSOLUTE
+        "${PS2X_RUNNER_GENERATED_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    foreach(PS2X_REQUIRED_GENERATED_FILE IN ITEMS
+        register_functions.cpp ps2_recompiled_functions.h ps2_recompiled_stubs.h)
+        if(NOT EXISTS "${PS2X_RUNNER_GENERATED_DIR_ABSOLUTE}/${PS2X_REQUIRED_GENERATED_FILE}")
+            message(FATAL_ERROR "Missing generated runner file: ${PS2X_RUNNER_GENERATED_DIR_ABSOLUTE}/${PS2X_REQUIRED_GENERATED_FILE}")
+        endif()
+    endforeach()
+    file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
+        "${PS2X_RUNNER_GENERATED_DIR_ABSOLUTE}/*.cpp")
+    set(PS2X_RUNNER_GENERATED_INCLUDE_DIR "${PS2X_RUNNER_GENERATED_DIR_ABSOLUTE}")
+else()
+    file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*.cpp")
+    set(PS2X_RUNNER_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
+endif()
 
 set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
 set(ROOT_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
-if(EXISTS "${RUNNER_MAIN_CPP}")
+if(PS2X_EMBEDDED_HOST)
+    list(APPEND RUNNER_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/entry.cpp")
+elseif(EXISTS "${RUNNER_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${RUNNER_MAIN_CPP}")
 elseif(EXISTS "${ROOT_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${ROOT_MAIN_CPP}")
 endif()
 
-if(PS2X_IS_ANDROID)
+if(PS2X_EMBEDDED_HOST)
+    add_library(ps2EntryRunner SHARED ${RUNNER_SRC_FILES})
+    set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "PS2XboxRuntime")
+elseif(PS2X_IS_ANDROID)
     add_library(ps2EntryRunner SHARED
         ${RUNNER_SRC_FILES}
     )
@@ -469,6 +510,12 @@ if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
     )
 endif()
 
+# Runtime memory helpers and generated VU/MMI code use SSE4.1 intrinsics.
+# Propagate the requirement to consumers compiling the public runtime headers.
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i[3-6]86)$")
+    target_compile_options(ps2_runtime PUBLIC -msse4.1)
+endif()
+
 if(PS2X_ENABLE_RUNNER_PCH)
     set(PS2X_RUNNER_PCH_HEADERS
         "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_runtime_macros.h"
@@ -476,8 +523,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
     )
 
     foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_functions.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_stubs.h")
+        "${PS2X_RUNNER_GENERATED_INCLUDE_DIR}/ps2_recompiled_functions.h"
+        "${PS2X_RUNNER_GENERATED_INCLUDE_DIR}/ps2_recompiled_stubs.h")
         if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
             list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
         endif()
@@ -491,13 +538,28 @@ if(PS2X_ENABLE_RUNNER_PCH)
     target_precompile_headers(ps2EntryRunner PRIVATE ${PS2X_RUNNER_PCH_HEADERS})
 endif()
 
+if(PS2X_RUNNER_GENERATED_DIR)
+    target_include_directories(ps2EntryRunner BEFORE PRIVATE "${PS2X_RUNNER_GENERATED_INCLUDE_DIR}")
+endif()
+
 if(PS2X_DEFAULT_BOOT_ELF_DEFINE)
     target_compile_definitions(ps2EntryRunner PRIVATE
         PS2X_DEFAULT_BOOT_ELF="${PS2X_DEFAULT_BOOT_ELF_DEFINE}"
     )
 endif()
 
+if(PS2X_EMBEDDED_HOST)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_EMBEDDED_HOST=1)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+    target_compile_definitions(ps2_runtime PUBLIC PS2X_UWP=1)
+endif()
+
 if(MSVC)
+    # Guest libc stubs intentionally implement the original C ABI; secure CRT
+    # replacements change their signatures and failure behavior.
+    target_compile_definitions(ps2_runtime PUBLIC _CRT_SECURE_NO_WARNINGS)
     target_compile_options(ps2EntryRunner PRIVATE /FS)
 endif()
 
@@ -558,7 +620,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
     EnableFastReleaseMode(ps2_runtime)
     EnableFastReleaseMode(ps2EntryRunner)
 
-    if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
+    if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE AND NOT PS2X_EMBEDDED_HOST)
         if(MSVC)
             target_link_options(ps2EntryRunner PRIVATE
                 $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:/SUBSYSTEM:WINDOWS>
@@ -573,7 +635,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
 endif()
 
 # Work around WinAPI vs raylib symbol clash for CloseWindow on x64
-if(MSVC)
+if(MSVC AND NOT PS2X_EMBEDDED_HOST)
     target_link_options(ps2EntryRunner PRIVATE "/FORCE:MULTIPLE")
 endif()
 

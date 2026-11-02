@@ -305,6 +305,16 @@ inline float ps2_fsqrt(float a)
     return ps2_fall_normal(a, a, r) ? r : ps2_fsqrt_slow(a);
 }
 
+inline int32_t ps2_fcvt_w_s(float value)
+{
+    // EE CVT.W.S always truncates toward zero. Exponent 255 represents finite
+    // EE values too; clamp by bits before the host conversion to avoid UB.
+    const uint32_t bits = std::bit_cast<uint32_t>(value);
+    if ((bits & 0x7FFFFFFFu) >= 0x4F000000u)
+        return (bits & 0x80000000u) ? INT32_MIN : INT32_MAX;
+    return static_cast<int32_t>(value);
+}
+
 inline float ps2_frsqrt(float a, float b)
 {
     const float r = a / std::sqrt(b);
@@ -853,7 +863,7 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
 #define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
 #define FPU_CVT_S_W(a) ((float)(int32_t)(a))
 #define FPU_CVT_S_L(a) ((float)(int64_t)(a))
-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+#define FPU_CVT_W_S(a) ps2_fcvt_w_s((float)(a))
 #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
 #define FPU_C_F_S(a, b) (0)
 #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))

@@ -23,3 +23,14 @@ android/app/.cxx/
 android/local.properties
 android/.gradle/ 
 .idea/
+# Python analysis caches and private runtime traces
+__pycache__/
+*.pyc
+ps2_log.txt
+
+# Xbox diagnostic build outputs and signing material
+artifacts/
+xbox/**/bin/
+xbox/**/obj/
+*.pfx
+*.p12

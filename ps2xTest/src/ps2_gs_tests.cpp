@@ -3706,6 +3706,22 @@ void register_ps2_gs_tests()
                      "the DDA should interpolate S=0.75 and Q=1.375, selecting texel 2 after S/Q");
         });
 
+        tc.Run("GS disabled depth test ignores ZTST and preserves depth", [](TestCase &t)
+        {
+            constexpr uint32_t initialFramebuffer = 0xAB030201u;
+            constexpr uint32_t initialDepth = 0xFFFFFFFFu;
+            for (uint64_t method = 0; method < 4; ++method)
+            {
+                const auto result = drawGsPixelForTests(
+                    GS_PSM_CT32, method << 17, false,
+                    initialFramebuffer, initialDepth, 0x80u);
+                t.Equals(result.framebuffer, 0x80563412u,
+                         "ZTE=0 must allow color even when ZTST rejects depth");
+                t.Equals(result.depth, initialDepth,
+                         "ZTE=0 must disable depth writes even with ZMSK=0");
+            }
+        });
+
         tc.Run("GS alpha-test AFAIL independently masks framebuffer and depth", [](TestCase &t)
         {
             constexpr uint32_t kInitialFramebuffer = 0xAB030201u;

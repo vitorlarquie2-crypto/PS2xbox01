@@ -279,6 +279,10 @@ public:
     void requestStop();
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+    // A transfer must unwind every native caller, even if its PC aliases a
+    // callee entry or a caller's fallthrough address.
+    [[nodiscard]] uint64_t dispatchTransferGeneration() const noexcept { return m_dispatchTransferGeneration; }
+    void noteDispatchTransfer() noexcept { ++m_dispatchTransferGeneration; }
     void accountCycles(uint32_t cycles) noexcept;
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
@@ -383,6 +387,10 @@ private:
     void requestPreemptionIfHigher(const GuestThread &readyThread, bool interruptSafe);
     void applyPendingPreemption();
     void processPendingEvents();
+    void processGsInterrupt();
+    [[nodiscard]] bool gsInterruptAsserted() const noexcept;
+    bool queueIrq(bool dmac, uint32_t cause,
+                  std::function<void(const R5900Context &, R5900Context &)> onComplete = {});
     void processDueDeadlines();
     void processEvent(const EeEvent &event);
     void finishEventWaiters(EeEventFlag &flag, bool interruptSafe);
@@ -425,6 +433,8 @@ private:
     bool m_timeSliceExpired = false;
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
+    bool m_gsIrqQueued = false;
+    uint64_t m_dispatchTransferGeneration = 0;
     uint64_t m_eeCycle = 0;
     uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
     std::thread::id m_executorThread{};

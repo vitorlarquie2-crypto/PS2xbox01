@@ -36,7 +36,19 @@ void function_name(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime);
 runtime.registerFunction(address, function_name);
 ```
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:71d332a14d4e48c30ff094aa553723da62a80cd37d25a4dbf12ef94c021ba79e -->
+
+## Desktop keyboard controls
+
+The desktop host uses arrow keys or WASD for the digital directional pad. I/J/K/L move the left analog stick up/left/down/right; opposite keys center that axis. X or Space confirms (Cross), C cancels (Circle), Z is Square, V is Triangle, and Enter is Start. A connected gamepad takes precedence over keyboard input.
+
+These bindings support desktop runtime verification. Xbox input still requires the platform host integration.
+
 ## Advanced Features
+
+<!-- /coderabbit-ai-generated:v1 -->
 Memory Translation
 The runtime handles PS2's memory addressing, including:
 

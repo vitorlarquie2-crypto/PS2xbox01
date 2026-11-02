@@ -1,0 +1,83 @@
+name: Xbox native host
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'xbox/Game/**'
+      - 'ps2xRuntime/**'
+      - 'ps2xIOP/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/xbox-native.yml'
+  pull_request:
+    paths:
+      - 'xbox/Game/**'
+      - 'ps2xRuntime/**'
+      - 'ps2xIOP/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/xbox-native.yml'
+permissions:
+  contents: read
+jobs:
+  windows-store:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure UWP native library with the public runner fixture
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/uwp -G "Visual Studio 17 2022" -A x64
+          '-DCMAKE_SYSTEM_NAME=WindowsStore' '-DCMAKE_SYSTEM_VERSION=10.0'
+          -DPS2X_EMBEDDED_HOST=ON -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF
+          -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_FFMPEG=OFF
+          -DPS2X_ENABLE_SCCACHE=OFF
+      - name: Compile the AppContainer DLL
+        run: cmake --build build/uwp --config Release --target ps2EntryRunner --parallel 3
+      - name: Compile the UWP application shell
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (!$msbuild) { throw 'MSBuild UWP workload is required.' }
+          $native = (Resolve-Path 'build/uwp/ps2xRuntime/Release/PS2XboxRuntime.dll').Path
+          & $msbuild xbox/Game/Game.csproj /restore /t:Build /p:Configuration=Release /p:Platform=x64 "/p:NativeRuntimePath=$native" /p:AppxPackageSigningEnabled=false
+          if ($LASTEXITCODE -ne 0) { throw "UWP app compilation failed: $LASTEXITCODE" }
+      - name: Prepare compiled shell without the runner fixture
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem xbox/Game/AppPackages -Recurse -Filter '*.msix' |
+            Where-Object { $_.DirectoryName -notmatch '[\\/]Dependencies([\\/]|$)' } | Select-Object -First 1
+          if (!$package) { throw 'The shell build did not produce an MSIX.' }
+          $makeappx = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.19041.0\x64\MakeAppx.exe"
+          & $makeappx unpack /p $package.FullName /d artifacts/xbox-game-shell/Layout /o
+          if ($LASTEXITCODE -ne 0) { throw "Shell extraction failed: $LASTEXITCODE" }
+          Remove-Item artifacts/xbox-game-shell/Layout/PS2XboxRuntime.dll
+          Get-ChildItem artifacts/xbox-game-shell/Layout -File |
+            Where-Object { $_.Name -in @('AppxBlockMap.xml', '[Content_Types].xml', 'AppxSignature.p7x') } |
+            Remove-Item
+          New-Item -ItemType Directory -Path artifacts/xbox-game-shell/Dependencies -Force | Out-Null
+          Get-ChildItem xbox/Game/AppPackages -Recurse -Filter '*.appx' |
+            Where-Object { $_.DirectoryName -match '[\\/]Dependencies[\\/]x64$' } |
+            Copy-Item -Destination artifacts/xbox-game-shell/Dependencies
+      - name: Preserve compiled shell for local private game packaging
+        uses: actions/upload-artifact@v6
+        with:
+          name: PS2Xbox-Game-shell-not-installable
+          path: artifacts/xbox-game-shell/
+          if-no-files-found: error
+          retention-days: 14
+  linux-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure embedded host
+        run: >-
+          cmake -S . -B build/embedded -DCMAKE_BUILD_TYPE=Debug
+          -DPS2X_EMBEDDED_HOST=ON -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF
+          -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_FFMPEG=OFF
+          -DPS2X_ENABLE_SCCACHE=OFF
+      - name: Build and test host boundaries and lifecycle
+        run: |
+          cmake --build build/embedded --target ps2EntryRunner ps2x_embedded_host_tests --parallel 3
+          build/embedded/ps2xRuntime/ps2x_embedded_host_tests
+          python3 xbox/Game/Native/lifecycle_test.py build/embedded/ps2xRuntime/libPS2XboxRuntime.so

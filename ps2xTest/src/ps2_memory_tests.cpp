@@ -1,5 +1,6 @@
 #include "MiniTest.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/ee_scheduler.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include "ps2_runtime.h"
@@ -438,6 +439,62 @@ void register_ps2_memory_tests()
                 }
             }
             t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
+        });
+
+        tc.Run("VIF V2 UNPACK replicates both components before offset and masking", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            for (uint8_t format : {0x64u, 0x65u, 0x66u})
+            {
+                for (bool zeroExtend : {false, true})
+                {
+                    std::memset(mem.getVU1Data(), 0x55, PS2_VU1_DATA_SIZE);
+                    std::vector<uint8_t> packet;
+                    appendU32(packet, makeVifCmd(0x30u, 0u, 0u));
+                    for (uint32_t row : {10u, 20u, 30u, 40u}) appendU32(packet, row);
+                    appendU32(packet, makeVifCmd(0x05u, 0u, 1u));
+                    appendU32(packet, makeVifCmd(format, 1u, zeroExtend ? 0x4000u : 0u));
+                    if (format == 0x64u) { appendU32(packet, 0xFFFFFFFEu); appendU32(packet, 7u); }
+                    else if (format == 0x65u) appendU32(packet, 0x0007FFFEu);
+                    else appendU32(packet, 0x000007FEu);
+                    mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+                    uint32_t lanes[4]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+                    const uint32_t x = !zeroExtend || format == 0x64u ? 0xFFFFFFFEu : format == 0x65u ? 65534u : 254u;
+                    t.Equals(lanes[0], x + 10u, "X should be extended and offset");
+                    t.Equals(lanes[1], 27u, "Y should be offset");
+                    t.Equals(lanes[2], x + 30u, "Z should repeat X before its own row offset");
+                    t.Equals(lanes[3], 47u, "W should repeat Y before its own row offset");
+                }
+            }
+            std::vector<uint8_t> masked;
+            appendU32(masked, makeVifCmd(0x05u, 0u, 0u));
+            appendU32(masked, makeVifCmd(0x20u, 0u, 0u));
+            appendU32(masked, 0xC0u); // Protect W; the other lanes select source data.
+            appendU32(masked, makeVifCmd(0x74u, 1u, 0u));
+            appendU32(masked, 91u); appendU32(masked, 92u);
+            mem.processVIF1Data(masked.data(), static_cast<uint32_t>(masked.size()));
+            uint32_t lanes[4]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+            t.Equals(lanes[2], 91u, "Mask data selector should use replicated X");
+            t.Equals(lanes[3], 47u, "Protect selector should preserve W");
+        });
+
+        tc.Run("VIF V3-32 UNPACK reads W without consuming the next vector or command", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0x55, PS2_VU1_DATA_SIZE);
+            std::vector<uint8_t> packet;
+            appendU32(packet, makeVifCmd(0x68u, 2u, 0u));
+            for (uint32_t value : {11u, 12u, 13u, 21u, 22u, 23u}) appendU32(packet, value);
+            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x4321u);
+            appendU32(packet, mark);
+            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+            uint32_t lanes[8]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+            t.Equals(lanes[3], 21u, "First W should read the next source word");
+            t.Equals(lanes[4], 21u, "Next vector should still begin at that source word");
+            t.Equals(lanes[7], mark, "Last W should read the following VIF word");
+            t.Equals(mem.vif1_regs.mark, 0x4321u, "Following VIF command must still execute");
         });
 
         tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
@@ -1418,6 +1475,49 @@ void register_ps2_memory_tests()
             t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u, "VIF1 QWC should be cleared after drain");
         });
 
+        tc.Run("VIF1 DMA completes long finite chains beyond 4096 tags", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            constexpr uint32_t channel = 0x10009000u, base = 0x40000u, count = 16000u;
+            auto *ram = mem.getRDRAM();
+            std::memset(ram + base, 0, (count + 1u) * 16u);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const uint64_t tag = makeDmaTag(0u, 1u, 0u, false);
+                std::memcpy(ram + base + i * 16u, &tag, sizeof(tag));
+            }
+            const uint64_t end = makeDmaTag(0u, 7u, 0u, false);
+            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x6a39u);
+            std::memcpy(ram + base + count * 16u, &end, sizeof(end));
+            std::memcpy(ram + base + count * 16u + 12u, &mark, sizeof(mark));
+            mem.writeIORegister(channel + 0x30u, base);
+            mem.writeIORegister(channel, 0x144u);
+            mem.processPendingTransfers();
+            t.Equals(mem.vif1_regs.mark, 0x6a39u, "The terminal VIF command must reach the device");
+            t.Equals(mem.readIORegister(channel + 0x30u), base + count * 16u,
+                     "TADR must reach the terminal END tag");
+            t.IsTrue((mem.readIORegister(channel) & 0x100u) == 0u,
+                     "STR should clear after the complete chain drains");
+        });
+
+        tc.Run("DMA cyclic chains report failure without false completion", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            constexpr uint32_t channel = 0x10009000u, base = 0x40000u;
+            const uint64_t next = makeDmaTag(0u, 2u, base, false);
+            std::memset(mem.getRDRAM() + base, 0, 16u);
+            std::memcpy(mem.getRDRAM() + base, &next, sizeof(next));
+            mem.writeIORegister(channel + 0x30u, base);
+            bool failed = false;
+            try { mem.writeIORegister(channel, 0x144u); }
+            catch (const std::runtime_error &) { failed = true; }
+            t.IsTrue(failed, "An infinite snapshot must report its repeated state");
+            t.IsTrue((mem.readIORegister(0x1000e010u) & 2u) == 0u,
+                     "A failed transfer must not signal VIF1 completion");
+        });
+
         tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
         {
             PS2Memory mem;
@@ -2034,6 +2134,8 @@ void register_ps2_memory_tests()
             R5900Context ctx{};
             setRegU32(ctx, 4, 1u); // sceDmaGetChan(1) / VIF1
             setRegU32(ctx, 5, kTag);
+            // DMA completion enters the EE scheduler on its executor thread.
+            runtime.eeScheduler().reset(rdram, ctx);
             ps2_stubs::sceDmaSend(rdram, &ctx, &runtime);
 
             t.Equals(static_cast<int32_t>(::getRegU32(&ctx, 2)), 0,
@@ -2112,7 +2214,65 @@ void register_ps2_memory_tests()
             t.IsTrue(imageOk, "VIF1 DIRECT image should update GS VRAM through GIF path2");
         });
 
-        tc.Run("VIF1 DIRECT image tag can continue with raw image qwords", [](TestCase &t)
+        tc.Run("VIF1 IMAGE continuation respects DIRECT boundaries and intervening VIF commands", [](TestCase &t)
+        {
+            for (const uint8_t directOpcode : {0x50u, 0x51u})
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+                GS gs;
+                gs.init(mem.getGSVRAM(), PS2_GS_VRAM_SIZE, &mem.gs());
+                GifArbiter arbiter([&](const uint8_t *data, uint32_t size)
+                {
+                    gs.processGIFPacket(data, size);
+                });
+                mem.setGifArbiter(&arbiter);
+                gs.writeRegister(GS_REG_BITBLTBUF, (1ull << 16) | (1ull << 48));
+                gs.writeRegister(GS_REG_TRXPOS, 0ull);
+                gs.writeRegister(GS_REG_TRXREG, 8ull | (1ull << 32));
+                gs.writeRegister(GS_REG_TRXDIR, 0ull);
+
+                std::vector<uint8_t> packet;
+                appendU32(packet, makeVifCmd(directOpcode, 0u, 1u));
+                appendU64(packet, makeGifTag(2u, GIF_FMT_IMAGE, 0u, true));
+                appendU64(packet, 0ull);
+                appendU32(packet, 0u); // The SOTC stream places a NOP before the next DIRECT.
+                appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u));
+                appendU32(packet, makeVifCmd(0x6Cu, 1u, 0x20u));
+                const uint32_t sentinel[4] = {0x12345678u, 0x87654321u, 0x11223344u, 0x55667788u};
+                for (const uint32_t word : sentinel)
+                    appendU32(packet, word);
+                appendU32(packet, makeVifCmd(directOpcode, 0u, 1u));
+                for (uint32_t i = 0; i < 16u; ++i)
+                    packet.push_back(static_cast<uint8_t>(0xA0u + i));
+                appendU32(packet, makeVifCmd(0x07u, 0u, 0x1234u));
+                mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+                t.IsTrue(std::memcmp(mem.getVU1Data() + 0x200u, sentinel, sizeof(sentinel)) == 0,
+                         "IMAGE continuation must not swallow an intervening UNPACK");
+                t.Equals(mem.vif1_regs.mark, 0x1234u, "DIRECT must end at its declared qword count");
+
+                // Continue the GIF IMAGE in a separate VIF buffer, then start a new GIFtag
+                // within the same DIRECT and resume VIF command decoding afterward.
+                packet.clear();
+                appendU32(packet, makeVifCmd(directOpcode, 0u, 2u));
+                for (uint32_t i = 16u; i < 32u; ++i)
+                    packet.push_back(static_cast<uint8_t>(0xA0u + i));
+                appendU64(packet, makeGifTag(0u, GIF_FMT_PACKED, 1u, true));
+                appendU64(packet, 0x0Full);
+                appendU32(packet, makeVifCmd(0x07u, 0u, 0x5678u));
+                mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+                t.Equals(mem.vif1_regs.mark, 0x5678u, "VIF commands after the continued IMAGE must execute");
+                for (uint32_t x = 0; x < 8u; ++x)
+                {
+                    const uint32_t off = GSPSMCT32::addrPSMCT32(0u, 1u, x, 0u);
+                    for (uint32_t c = 0; c < 4u; ++c)
+                        t.Equals(mem.getGSVRAM()[off + c], static_cast<uint8_t>(0xA0u + x * 4u + c),
+                                 "both DIRECT payloads must reach the GS without VIF command bytes");
+                }
+            }
+        });
+
+        tc.Run("VIF1 DIRECT contains its IMAGE tag and image qwords", [](TestCase &t)
         {
             PS2Memory mem;
             t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
@@ -2138,7 +2298,7 @@ void register_ps2_memory_tests()
             gs.writeRegister(GS_REG_TRXDIR, 0ull);
 
             std::vector<uint8_t> packet;
-            appendU32(packet, makeVifCmd(0x50u, 0u, 1u)); // DIRECT 1 QW payload: GIF IMAGE tag only.
+            appendU32(packet, makeVifCmd(0x50u, 0u, 2u)); // IMAGE tag plus its one-qword payload.
             appendU64(packet, makeGifTag(1u, GIF_FMT_IMAGE, 0u, true));
             appendU64(packet, 0ull);
             for (uint32_t i = 0; i < 16u; ++i)
@@ -2162,7 +2322,7 @@ void register_ps2_memory_tests()
                     }
                 }
             }
-            t.IsTrue(imageOk, "raw qwords after a DIRECT image tag should continue the PATH2 image upload");
+            t.IsTrue(imageOk, "the declared DIRECT payload should upload the image");
         });
 
         tc.Run("VIF1 DIRECT finds an image continuation after packed setup", [](TestCase &t)
@@ -2187,7 +2347,7 @@ void register_ps2_memory_tests()
             gs.writeRegister(GS_REG_TRXDIR, 0ull);
 
             std::vector<uint8_t> packet;
-            appendU32(packet, makeVifCmd(0x50u, 0u, 3u)); // PACKED tag + A+D + IMAGE tag.
+            appendU32(packet, makeVifCmd(0x50u, 0u, 4u)); // PACKED tag + A+D + IMAGE tag + image data.
             appendU64(packet, makeGifTag(1u, GIF_FMT_PACKED, 1u, false));
             appendU64(packet, 0x0Eull);
             appendU64(packet, 0x8000008000ull); // TEXA, harmless setup preceding the IMAGE tag.

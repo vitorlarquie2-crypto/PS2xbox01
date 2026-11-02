@@ -668,6 +668,34 @@ void register_ps2_runtime_kernel_tests()
                       "the scheduler must publish guest execution only around the active guest call");
         });
 
+        tc.Run("new and restarted EE contexts preserve the VU0 constant vector", [](TestCase &t)
+        {
+            auto checkConstant = [&t](const R5900Context &context)
+            {
+                alignas(16) float lanes[4];
+                _mm_store_ps(lanes, context.vu0_vf[0]);
+                t.IsTrue(lanes[0] == 0.0f && lanes[1] == 0.0f && lanes[2] == 0.0f && lanes[3] == 1.0f,
+                         "VU0 VF00 must be (0, 0, 0, 1) in every fresh EE context");
+            };
+            checkConstant(R5900Context{});
+
+            TestEnv env;
+            EeScheduler &ee = env.runtime.eeScheduler();
+            ee.reset(env.rdram.data(), env.ctx);
+            ee.bindMainContextForSyscall(env.ctx, env.rdram.data());
+            const int id = ee.createThread(EeThreadCreateParams{0u, K_SCHED_HIGH, 0x24000u, 0x800u,
+                                                                 0u, 20, 0u});
+            t.IsTrue(id > 0, "CreateThread should return a valid thread id");
+            checkConstant(ee.thread(id)->context);
+            t.Equals(ee.startThread(id, 0u, env.ctx, false), KE_OK, "StartThread should succeed");
+            checkConstant(ee.thread(id)->context);
+
+            uint32_t ownedStack = 0u;
+            t.Equals(ee.terminateThread(id, ownedStack, false), KE_OK, "TerminateThread should make the thread dormant");
+            t.Equals(ee.startThread(id, 0u, env.ctx, false), KE_OK, "a dormant thread should restart");
+            checkConstant(ee.thread(id)->context);
+        });
+
         tc.Run("thread lifecycle, nested suspend, WAIT-SUSPEND, and wakeup count are centralized", [](TestCase &t)
         {
             TestEnv env;

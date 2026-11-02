@@ -1,6 +1,7 @@
 #include "MiniTest.h"
 #include "ps2recomp/code_generator.h"
 #include "ps2recomp/instructions.h"
+#include "ps2recomp/r5900_decoder.h"
 #include "ps2recomp/types.h"
 #include "ps2_runtime_macros.h"
 
@@ -101,6 +102,23 @@ void register_ps2_float_semantics_tests()
 {
     MiniTest::Case("PS2FloatSemantics", [](TestCase &tc)
     {
+        tc.Run("EE CVT.W.S truncates and saturates independently of host rounding", [](TestCase &t)
+        {
+            t.Equals(FPU_CVT_W_S(5.5f), 5, "area coordinate must stay in cell 5");
+            t.Equals(FPU_CVT_W_S(-1.85f), -1, "negative fractions truncate toward zero");
+            t.Equals(FPU_CVT_W_S(0.9f), 0, "positive fractions below one truncate to zero");
+            t.Equals(FPU_CVT_W_S(-0.9f), 0, "negative fractions above minus one truncate to zero");
+            t.Equals(FPU_CVT_W_S(2147483520.0f), 2147483520, "largest in-range positive float converts exactly");
+            t.Equals(FPU_CVT_W_S(floatOf(0x4F000000u)), INT32_MAX, "positive overflow saturates");
+            t.Equals(FPU_CVT_W_S(floatOf(0xCF000000u)), INT32_MIN, "minus 2^31 is representable");
+            t.Equals(FPU_CVT_W_S(floatOf(0xCF000001u)), INT32_MIN, "negative overflow saturates");
+            for (uint32_t bits : {0x7F800000u, 0x7FC00000u, 0x7FFFFFFFu})
+            {
+                t.Equals(FPU_CVT_W_S(floatOf(bits)), INT32_MAX, "EE exponent 255 saturates positively");
+                t.Equals(FPU_CVT_W_S(floatOf(bits | 0x80000000u)), INT32_MIN, "EE exponent 255 saturates negatively");
+            }
+        });
+
         tc.Run("FPU results match the PS2 hardware results from ps2autotests", [](TestCase &t)
         {
             for (const HardwareVector &v : kHardwareVectors)
@@ -210,7 +228,7 @@ void register_ps2_float_semantics_tests()
             t.Equals(laneBits(flushed, 3), bitsOf(0.5f), "lane 3: 1 * 0.5 should be 0.5");
         });
 
-        tc.Run("DIV.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
+        tc.Run("DIV.S, SQRT.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
         {
             CodeGenerator gen({}, {});
 
@@ -219,6 +237,17 @@ void register_ps2_float_semantics_tests()
             t.IsTrue(div.find("ctx->f[2] = FPU_DIV_S(ctx->f[3], ctx->f[4])") != std::string::npos,
                      "DIV.S should write fs / ft to fd but got: " + div);
             t.IsTrue(div.find("INFINITY") == std::string::npos, "DIV.S must not produce IEEE infinity but got: " + div);
+
+            const std::string sqrt = gen.translateInstruction(makeCop1S(COP1_S_SQRT, 2, 3, 4));
+            t.IsTrue(sqrt.find("ctx->f[2] = FPU_SQRT_S(ctx->f[4])") != std::string::npos,
+                     "EE SQRT.S should read ft, even when fs differs, but got: " + sqrt);
+
+            // Real EE encoding used to normalize the game's left analog input.
+            R5900Decoder decoder;
+            const Instruction analogSqrt = decoder.decodeInstruction(0x1b22c8u, 0x46020004u);
+            const std::string analog = gen.translateInstruction(analogSqrt);
+            t.IsTrue(analog.find("ctx->f[0] = FPU_SQRT_S(ctx->f[2])") != std::string::npos,
+                     "0x46020004 should compute sqrt(f2) into f0 but got: " + analog);
 
             const std::string rsqrt = gen.translateInstruction(makeCop1S(COP1_S_RSQRT, 2, 3, 4));
             t.IsTrue(rsqrt.find("ctx->f[2] = FPU_RSQRT_S(ctx->f[3], ctx->f[4])") != std::string::npos,
