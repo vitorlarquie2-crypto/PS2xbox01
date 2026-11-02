@@ -9,6 +9,7 @@
 #include <regex>
 #include <sstream>
 #include <utility>
+#include <tuple>
 
 using namespace ps2recomp;
 
@@ -1598,6 +1599,38 @@ void register_code_generator_tests()
             t.IsTrue(out.find("ctx->vu0_vf[6]") != std::string::npos, "S2 VLQI destination VF should come from rt");
             t.IsTrue(out.find("ctx->vi[20]") == std::string::npos, "S2 VLQI must not use rs(format) as VI index");
         });
+
+        for (const auto &[opcode, store, decrement] : {
+                 std::tuple{VU0_S2_VLQI, false, false},
+                 std::tuple{VU0_S2_VLQD, false, true},
+                 std::tuple{VU0_S2_VSQI, true, false},
+                 std::tuple{VU0_S2_VSQD, true, true}})
+        {
+            tc.Run(std::string("VU0 local memory ") + (store ? "store " : "load ") +
+                       (decrement ? "predecrement" : "postincrement"),
+                   [=](TestCase &t) {
+                Instruction inst{};
+                inst.opcode = OPCODE_COP2;
+                inst.rs = COP2_CO | 0xF;
+                inst.function = 0x3C;
+                inst.rd = store ? 4 : 15;
+                inst.rt = store ? 15 : 4;
+                inst.raw = (((opcode >> 2) & 0x1F) << 6) | (opcode & 3);
+                inst.vectorInfo.vectorField = 0xF;
+                CodeGenerator gen({}, {});
+                const std::string out = gen.translateInstruction(inst);
+                t.IsTrue(out.find("0x11004000u") != std::string::npos,
+                         "VU0 transfers must address VU0 data memory, preserving EE RAM");
+                t.IsTrue(out.find("ctx->vi[15]") != std::string::npos,
+                         "store base is It; load base is Is");
+                t.IsTrue(out.find("ctx->vi[4]") == std::string::npos,
+                         "VF4 must not be interpreted as a VI base");
+                t.IsTrue(out.find("ctx->vu0_vf[4]") != std::string::npos,
+                         "store source is Fs; load destination is Ft");
+                t.IsTrue(out.find("static_cast<uint16_t>") != std::string::npos,
+                         "VI arithmetic wraps at 16 bits, separately from memory addressing");
+            });
+        }
 
         tc.Run("JAL to known function emits call and check", [](TestCase &t) {
             Function func;
