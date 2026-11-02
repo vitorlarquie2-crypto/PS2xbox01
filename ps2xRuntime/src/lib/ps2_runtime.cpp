@@ -17,6 +17,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <exception>
 #include <fstream>
 #include <algorithm>
 #include <array>
@@ -375,18 +376,25 @@ namespace
     }
 }
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+struct HostPresentationState
 {
-    static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
-    static bool s_hasLatchedInitialFrame = false;
-    static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
-    static uint32_t s_lastSourceFbp = std::numeric_limits<uint32_t>::max();
-    static bool s_lastPreferred = false;
-    static uint32_t s_lastWidth = 0u;
-    static uint32_t s_lastHeight = 0u;
-    static bool s_hasUploadedFrame = false;
-    static std::vector<uint8_t> s_scratch;
-    static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
+    uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+    bool s_hasLatchedInitialFrame = false;
+    uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
+    uint32_t s_lastSourceFbp = std::numeric_limits<uint32_t>::max();
+    bool s_lastPreferred = false;
+    uint32_t s_lastWidth = 0u;
+    uint32_t s_lastHeight = 0u;
+    bool s_hasUploadedFrame = false;
+    std::vector<uint8_t> s_scratch;
+    std::vector<uint8_t> s_uploadBuffer = std::vector<uint8_t>(DEFAULT_FB_SIZE, 0u);
+
+};
+
+static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight, HostPresentationState &state)
+{
+    auto &[s_lastPresentationTick, s_hasLatchedInitialFrame, s_lastDisplayFbp, s_lastSourceFbp,
+           s_lastPreferred, s_lastWidth, s_lastHeight, s_hasUploadedFrame, s_scratch, s_uploadBuffer] = state;
 
     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
@@ -2413,6 +2421,9 @@ void PS2Runtime::run()
     UnloadImage(blank);
 
     std::atomic<bool> gameThreadFinished{false};
+#if defined(PS2X_EMBEDDED_HOST)
+    std::exception_ptr executionFailure;
+#endif
 
     std::thread gameThread([&]()
                            {
@@ -2427,14 +2438,21 @@ void PS2Runtime::run()
         }
         catch (const std::exception &e)
         {
+#if defined(PS2X_EMBEDDED_HOST)
+            executionFailure = std::current_exception();
+#endif
             std::cerr << "Error during program execution: " << e.what() << std::endl;
         }
         catch (...)
         {
+#if defined(PS2X_EMBEDDED_HOST)
+            executionFailure = std::current_exception();
+#endif
             std::cerr << "Error during program execution: unknown exception" << std::endl;
         }
         gameThreadFinished.store(true, std::memory_order_release); });
 
+    HostPresentationState presentation;
     uint64_t tick = 0;
     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
     {
@@ -2472,7 +2490,7 @@ void PS2Runtime::run()
         });
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+        UploadFrame(frameTex, this, presentWidth, presentHeight, presentation);
 
         BeginDrawing();
         ClearBackground(BLACK);
@@ -2518,5 +2536,8 @@ void PS2Runtime::run()
     UnloadTexture(frameTex);
     CloseWindow();
 
+#if defined(PS2X_EMBEDDED_HOST)
+    if (executionFailure) std::rethrow_exception(executionFailure);
+#endif
     RUNTIME_LOG("[run] exiting loop");
 }

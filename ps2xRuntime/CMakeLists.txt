@@ -76,11 +76,18 @@ else()
         set(PLATFORM "Android" CACHE STRING "" FORCE)
     endif()
 
+    set(PS2X_RAYLIB_SUBDIR ".")
+    if(PS2X_EMBEDDED_HOST)
+        # Use the raylib ABI headers without compiling its desktop window backend.
+        set(PS2X_RAYLIB_SUBDIR "ps2x_headers_only")
+        set(PS2X_ENABLE_DEBUG_UI OFF)
+    endif()
     FetchContent_Declare(
         raylib
         GIT_REPOSITORY "https://github.com/raysan5/raylib.git"
         GIT_TAG "5.5" # we will migrate to 4.2.0 later, trust me it will be better
         GIT_PROGRESS TRUE
+        SOURCE_SUBDIR "${PS2X_RAYLIB_SUBDIR}"
     )
     FetchContent_MakeAvailable(raylib)
 
@@ -235,6 +242,19 @@ if(PS2X_IS_VITA)
         c
         pthread
     )
+elseif(PS2X_EMBEDDED_HOST)
+    add_library(ps2x_embedded_backend STATIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/host.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/audio.cpp")
+    target_include_directories(ps2x_embedded_backend PUBLIC "${raylib_SOURCE_DIR}/src")
+    target_link_libraries(ps2_host_backend INTERFACE ps2x_embedded_backend)
+    if(WIN32)
+        target_link_libraries(ps2x_embedded_backend PRIVATE xaudio2)
+    endif()
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+        add_executable(ps2x_embedded_host_tests "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/tests.cpp")
+        target_link_libraries(ps2x_embedded_host_tests PRIVATE ps2x_embedded_backend)
+    endif()
 else()
     target_link_libraries(ps2_host_backend INTERFACE raylib)
 
@@ -460,13 +480,18 @@ endif()
 set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
 set(ROOT_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
-if(EXISTS "${RUNNER_MAIN_CPP}")
+if(PS2X_EMBEDDED_HOST)
+    list(APPEND RUNNER_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../xbox/Game/Native/entry.cpp")
+elseif(EXISTS "${RUNNER_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${RUNNER_MAIN_CPP}")
 elseif(EXISTS "${ROOT_MAIN_CPP}")
     list(APPEND RUNNER_SRC_FILES "${ROOT_MAIN_CPP}")
 endif()
 
-if(PS2X_IS_ANDROID)
+if(PS2X_EMBEDDED_HOST)
+    add_library(ps2EntryRunner SHARED ${RUNNER_SRC_FILES})
+    set_target_properties(ps2EntryRunner PROPERTIES OUTPUT_NAME "PS2XboxRuntime")
+elseif(PS2X_IS_ANDROID)
     add_library(ps2EntryRunner SHARED
         ${RUNNER_SRC_FILES}
     )
@@ -521,6 +546,14 @@ if(PS2X_DEFAULT_BOOT_ELF_DEFINE)
     target_compile_definitions(ps2EntryRunner PRIVATE
         PS2X_DEFAULT_BOOT_ELF="${PS2X_DEFAULT_BOOT_ELF_DEFINE}"
     )
+endif()
+
+if(PS2X_EMBEDDED_HOST)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_EMBEDDED_HOST=1)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+    target_compile_definitions(ps2_runtime PUBLIC PS2X_UWP=1)
 endif()
 
 if(MSVC)
@@ -584,7 +617,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
     EnableFastReleaseMode(ps2_runtime)
     EnableFastReleaseMode(ps2EntryRunner)
 
-    if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
+    if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE AND NOT PS2X_EMBEDDED_HOST)
         if(MSVC)
             target_link_options(ps2EntryRunner PRIVATE
                 $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:/SUBSYSTEM:WINDOWS>
@@ -599,7 +632,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
 endif()
 
 # Work around WinAPI vs raylib symbol clash for CloseWindow on x64
-if(MSVC)
+if(MSVC AND NOT PS2X_EMBEDDED_HOST)
     target_link_options(ps2EntryRunner PRIVATE "/FORCE:MULTIPLE")
 endif()
 

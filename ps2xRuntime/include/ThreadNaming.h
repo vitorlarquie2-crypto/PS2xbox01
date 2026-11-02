@@ -18,8 +18,12 @@ extern "C"
     typedef const wchar_t *PCWSTR;
     typedef long HRESULT;
 
+#if defined(PS2X_UWP)
+    __declspec(dllimport) HRESULT WINAPI SetThreadDescription(HANDLE hThread, PCWSTR description);
+#else
     __declspec(dllimport) HMODULE WINAPI GetModuleHandleW(const wchar_t *lpModuleName);
     __declspec(dllimport) void *WINAPI GetProcAddress(HMODULE hModule, const char *lpProcName);
+#endif
     __declspec(dllimport) HANDLE WINAPI GetCurrentThread(void);
 }
 #elif defined(__APPLE__) || defined(__linux__)
@@ -30,7 +34,10 @@ namespace ThreadNaming
 {
     inline void SetCurrentThreadName(std::string_view name)
     {
-#if defined(_WIN32) 
+#if defined(_WIN32) && defined(PS2X_UWP)
+        std::wstring wname(name.begin(), name.end());
+        ::SetThreadDescription(::GetCurrentThread(), wname.c_str());
+#elif defined(_WIN32)
         using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
 
         HMODULE kernel32 = ::GetModuleHandleW(L"Kernel32.dll");
