@@ -2,7 +2,23 @@
 
 # Primeiro teste no Xbox Series S
 
-Este alvo é um aplicativo UWP x64 separado para verificar instalação, abertura, tela e controle no Dev Mode. **Ele não contém nem executa Shadow of the Colossus ou o runtime PS2.** Não valida renderização do jogo, áudio, desempenho ou compatibilidade do recompilador. O projeto do jogo ainda depende de portar o host desktop e resolver a espera no título.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e7fe1809d4b13bb1351f6896a8caab8def06327bbcee0f98508c367acbb932a1 -->
+
+## Aplicativo experimental do jogo
+
+`xbox/Game` é o host UWP x64 para o runtime incorporado. Exibe os frames do GS, recebe o controle Xbox, importa o Game.zip do próprio usuário e executa o ELF SCUS_974.72 correspondente às funções recompiladas privadas. A importação usa LocalState e preserva uma pasta Game existente.
+
+O workflow `Xbox native host` compila e valida o shell com um registro vazio de funções, remove a DLL de teste antes de publicar o artefato e fornece as dependências x64. Esse artefato sozinho não é instalável. O pacote real exige uma DLL WindowsStore construída com as funções privadas do jogo. Esses arquivos não devem ser publicados nos artefatos públicos do workflow.
+
+Nesta tarefa foi construído localmente um APPX experimental assinado com DLL privada real. A assinatura, o formato AMD64/AppContainer e os símbolos das dependências C++ foram verificados. Ainda não foram validadas a instalação e a execução desse APPX no Xbox. A execução de referência apresenta distorções gráficas; jogabilidade visível e controlável permanece pendente.
+
+## Diagnóstico de instalação
+
+Este alvo de diagnóstico é um aplicativo UWP x64 separado para verificar instalação, abertura, tela e controle no Dev Mode. **Ele não contém nem executa Shadow of the Colossus ou o runtime PS2.** Não valida renderização do jogo, áudio, desempenho ou compatibilidade do recompilador.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ## Gerar o pacote
 
