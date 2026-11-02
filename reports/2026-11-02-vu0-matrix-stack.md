@@ -4,7 +4,13 @@
 
 ## Falha encontrada
 
-O rastreamento do asset do jogador mostrou matrizes de ossos com os três primeiros vetores zerados. A cadeia de produtores levou às rotinas de salvar/restaurar a matriz atual.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:1b7b9edfb11673dfd8a09a1a5269496abf467b4adde9654d847ff29cdef5b497 -->
+
+O rastreamento de um modelo da cena mostrou matrizes de ossos com os três primeiros vetores zerados. A associação desse modelo a Wander não foi estabelecida. A cadeia de produtores levou às rotinas de salvar/restaurar a matriz atual.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 A tradução de VSQI trocava o vetor fonte Fs pelo registrador de endereço It. Além disso, VSQI e VLQD acessavam endereços baixos da RAM EE, embora essas instruções operem na memória local VU0. Ao retornar de um ramo do esqueleto, a matriz anterior não era restaurada. Esta é uma correção de semântica de instrução; não muda as regras do jogo nem injeta posições em sua memória.
 
