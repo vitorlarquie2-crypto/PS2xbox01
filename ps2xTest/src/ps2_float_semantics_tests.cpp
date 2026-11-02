@@ -102,6 +102,23 @@ void register_ps2_float_semantics_tests()
 {
     MiniTest::Case("PS2FloatSemantics", [](TestCase &tc)
     {
+        tc.Run("EE CVT.W.S truncates and saturates independently of host rounding", [](TestCase &t)
+        {
+            t.Equals(FPU_CVT_W_S(5.5f), 5, "area coordinate must stay in cell 5");
+            t.Equals(FPU_CVT_W_S(-1.85f), -1, "negative fractions truncate toward zero");
+            t.Equals(FPU_CVT_W_S(0.9f), 0, "positive fractions below one truncate to zero");
+            t.Equals(FPU_CVT_W_S(-0.9f), 0, "negative fractions above minus one truncate to zero");
+            t.Equals(FPU_CVT_W_S(2147483520.0f), 2147483520, "largest in-range positive float converts exactly");
+            t.Equals(FPU_CVT_W_S(floatOf(0x4F000000u)), INT32_MAX, "positive overflow saturates");
+            t.Equals(FPU_CVT_W_S(floatOf(0xCF000000u)), INT32_MIN, "minus 2^31 is representable");
+            t.Equals(FPU_CVT_W_S(floatOf(0xCF000001u)), INT32_MIN, "negative overflow saturates");
+            for (uint32_t bits : {0x7F800000u, 0x7FC00000u, 0x7FFFFFFFu})
+            {
+                t.Equals(FPU_CVT_W_S(floatOf(bits)), INT32_MAX, "EE exponent 255 saturates positively");
+                t.Equals(FPU_CVT_W_S(floatOf(bits | 0x80000000u)), INT32_MIN, "EE exponent 255 saturates negatively");
+            }
+        });
+
         tc.Run("FPU results match the PS2 hardware results from ps2autotests", [](TestCase &t)
         {
             for (const HardwareVector &v : kHardwareVectors)
