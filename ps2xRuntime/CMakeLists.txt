@@ -557,6 +557,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 endif()
 
 if(MSVC)
+    # Guest libc stubs intentionally implement the original C ABI; secure CRT
+    # replacements change their signatures and failure behavior.
+    target_compile_definitions(ps2_runtime PUBLIC _CRT_SECURE_NO_WARNINGS)
     target_compile_options(ps2EntryRunner PRIVATE /FS)
 endif()
 
