@@ -441,6 +441,62 @@ void register_ps2_memory_tests()
             t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
         });
 
+        tc.Run("VIF V2 UNPACK replicates both components before offset and masking", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            for (uint8_t format : {0x64u, 0x65u, 0x66u})
+            {
+                for (bool zeroExtend : {false, true})
+                {
+                    std::memset(mem.getVU1Data(), 0x55, PS2_VU1_DATA_SIZE);
+                    std::vector<uint8_t> packet;
+                    appendU32(packet, makeVifCmd(0x30u, 0u, 0u));
+                    for (uint32_t row : {10u, 20u, 30u, 40u}) appendU32(packet, row);
+                    appendU32(packet, makeVifCmd(0x05u, 0u, 1u));
+                    appendU32(packet, makeVifCmd(format, 1u, zeroExtend ? 0x4000u : 0u));
+                    if (format == 0x64u) { appendU32(packet, 0xFFFFFFFEu); appendU32(packet, 7u); }
+                    else if (format == 0x65u) appendU32(packet, 0x0007FFFEu);
+                    else appendU32(packet, 0x000007FEu);
+                    mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+                    uint32_t lanes[4]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+                    const uint32_t x = !zeroExtend || format == 0x64u ? 0xFFFFFFFEu : format == 0x65u ? 65534u : 254u;
+                    t.Equals(lanes[0], x + 10u, "X should be extended and offset");
+                    t.Equals(lanes[1], 27u, "Y should be offset");
+                    t.Equals(lanes[2], x + 30u, "Z should repeat X before its own row offset");
+                    t.Equals(lanes[3], 47u, "W should repeat Y before its own row offset");
+                }
+            }
+            std::vector<uint8_t> masked;
+            appendU32(masked, makeVifCmd(0x05u, 0u, 0u));
+            appendU32(masked, makeVifCmd(0x20u, 0u, 0u));
+            appendU32(masked, 0xC0u); // Protect W; the other lanes select source data.
+            appendU32(masked, makeVifCmd(0x74u, 1u, 0u));
+            appendU32(masked, 91u); appendU32(masked, 92u);
+            mem.processVIF1Data(masked.data(), static_cast<uint32_t>(masked.size()));
+            uint32_t lanes[4]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+            t.Equals(lanes[2], 91u, "Mask data selector should use replicated X");
+            t.Equals(lanes[3], 47u, "Protect selector should preserve W");
+        });
+
+        tc.Run("VIF V3-32 UNPACK reads W without consuming the next vector or command", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            std::memset(mem.getVU1Data(), 0x55, PS2_VU1_DATA_SIZE);
+            std::vector<uint8_t> packet;
+            appendU32(packet, makeVifCmd(0x68u, 2u, 0u));
+            for (uint32_t value : {11u, 12u, 13u, 21u, 22u, 23u}) appendU32(packet, value);
+            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x4321u);
+            appendU32(packet, mark);
+            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
+            uint32_t lanes[8]; std::memcpy(lanes, mem.getVU1Data(), sizeof(lanes));
+            t.Equals(lanes[3], 21u, "First W should read the next source word");
+            t.Equals(lanes[4], 21u, "Next vector should still begin at that source word");
+            t.Equals(lanes[7], mark, "Last W should read the following VIF word");
+            t.Equals(mem.vif1_regs.mark, 0x4321u, "Following VIF command must still execute");
+        });
+
         tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
         {
             PS2Memory mem;

@@ -42,14 +42,28 @@ jobs:
           $native = (Resolve-Path 'build/uwp/ps2xRuntime/Release/PS2XboxRuntime.dll').Path
           & $msbuild xbox/Game/Game.csproj /restore /t:Build /p:Configuration=Release /p:Platform=x64 "/p:NativeRuntimePath=$native" /p:AppxPackageSigningEnabled=false
           if ($LASTEXITCODE -ne 0) { throw "UWP app compilation failed: $LASTEXITCODE" }
+      - name: Prepare compiled shell without the runner fixture
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem xbox/Game/AppPackages -Recurse -Filter '*.msix' |
+            Where-Object { $_.DirectoryName -notmatch '[\\/]Dependencies([\\/]|$)' } | Select-Object -First 1
+          if (!$package) { throw 'The shell build did not produce an MSIX.' }
+          $makeappx = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.19041.0\x64\MakeAppx.exe"
+          & $makeappx unpack /p $package.FullName /d artifacts/xbox-game-shell/Layout /o
+          if ($LASTEXITCODE -ne 0) { throw "Shell extraction failed: $LASTEXITCODE" }
+          Remove-Item artifacts/xbox-game-shell/Layout/PS2XboxRuntime.dll
+          Get-ChildItem artifacts/xbox-game-shell/Layout -File |
+            Where-Object { $_.Name -in @('AppxBlockMap.xml', '[Content_Types].xml', 'AppxSignature.p7x') } |
+            Remove-Item
+          New-Item -ItemType Directory -Path artifacts/xbox-game-shell/Dependencies -Force | Out-Null
+          Get-ChildItem xbox/Game/AppPackages -Recurse -Filter '*.appx' |
+            Where-Object { $_.DirectoryName -match '[\\/]Dependencies[\\/]x64$' } |
+            Copy-Item -Destination artifacts/xbox-game-shell/Dependencies
       - name: Preserve compiled shell for local private game packaging
         uses: actions/upload-artifact@v6
         with:
           name: PS2Xbox-Game-shell-not-installable
-          path: |
-            xbox/Game/bin/x64/Release/AppX/**
-            !xbox/Game/bin/x64/Release/AppX/PS2XboxRuntime.dll
-            !xbox/Game/bin/x64/Release/AppX/**/*.pdb
+          path: artifacts/xbox-game-shell/
           if-no-files-found: error
           retention-days: 14
   linux-host:

@@ -702,6 +702,20 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         handledFormat = false;
                     }
 
+                    // Hardware expands V2 as X,Y,X,Y before STMOD and masking.
+                    // V3-32 also loads a fourth word, while advancing the source by
+                    // only three words. That lookahead may be the next VIFcode.
+                    if (handledFormat && decoded && components == 2)
+                    {
+                        decompressed[2] = decompressed[0];
+                        decompressed[3] = decompressed[1];
+                    }
+                    else if (handledFormat && decoded && components == 3 && vl == 0u &&
+                             static_cast<size_t>(srcVec - data) + 16u <= sizeBytes)
+                    {
+                        std::memcpy(&decompressed[3], srcVec + 12u, sizeof(uint32_t));
+                    }
+
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
                     if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
                     {
