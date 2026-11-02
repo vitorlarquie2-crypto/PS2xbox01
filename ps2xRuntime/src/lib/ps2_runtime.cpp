@@ -1385,6 +1385,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                      GuestBranchKind kind,
                                      const char *debugName)
 {
+    const auto unwindCaller = [this]()
+    {
+        if (m_eeScheduler)
+            m_eeScheduler->noteDispatchTransfer();
+        return false;
+    };
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 
@@ -1393,7 +1399,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     // this charge bounds straight-line call chains that have no local loop.
     if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
     {
-        return false;
+        return unwindCaller();
     }
 
     if (!isCall)
@@ -1404,7 +1410,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         }
 
         ctx->pc = targetPc;
-        return false;
+        return unwindCaller();
     }
 
     if (!hasFunction(targetPc))
@@ -1423,19 +1429,23 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         {
             ctx->pc = targetPc;
             // if you need the app to keep open to open debug pannel change this to false
-            return false;
+            return unwindCaller();
         }
 
-        return false;
+        return unwindCaller();
     }
 
     RecompiledFunction targetFn = lookupFunction(targetPc);
     const uint32_t entryPc = ctx->pc;
+    const uint64_t transferGeneration = m_eeScheduler ? m_eeScheduler->dispatchTransferGeneration() : 0u;
     targetFn(rdram, ctx, this);
+
+    if (m_eeScheduler && m_eeScheduler->dispatchTransferGeneration() != transferGeneration)
+        return unwindCaller();
 
     if (isStopRequested() || ctx->pc == 0u)
     {
-        return false;
+        return unwindCaller();
     }
 
     if (ctx->pc == entryPc)
@@ -1443,7 +1453,9 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         ctx->pc = fallthroughPc;
     }
 
-    return ctx->pc == fallthroughPc;
+    if (ctx->pc != fallthroughPc)
+        return unwindCaller();
+    return true;
 }
 
 void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
@@ -2246,7 +2258,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
 
 bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
 {
-    return m_eeScheduler->checkpointDue(cycles);
+    if (!m_eeScheduler->checkpointDue(cycles))
+        return false;
+    m_eeScheduler->noteDispatchTransfer();
+    return true;
 }
 
 [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
