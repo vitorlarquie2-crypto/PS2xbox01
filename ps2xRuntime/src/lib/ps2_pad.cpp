@@ -89,6 +89,12 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     }
     else
     {
+        // Keep the digital directions independent so games can use both controls.
+        const int leftX = static_cast<int>(IsKeyDown(KEY_L)) - static_cast<int>(IsKeyDown(KEY_J));
+        const int leftY = static_cast<int>(IsKeyDown(KEY_K)) - static_cast<int>(IsKeyDown(KEY_I));
+        data[6] = static_cast<uint8_t>(kPadStickCenter + leftX * 127);
+        data[7] = static_cast<uint8_t>(kPadStickCenter + leftY * 127);
+
         if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
             clearBit(PAD_UP);
         if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
